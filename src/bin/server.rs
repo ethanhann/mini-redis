@@ -42,18 +42,14 @@ pub async fn main() -> mini_redis::Result<()> {
         port: cli.port,
     };
 
-    let path = PathBuf::from("mini-redis.toml");
-    let config = load_config(&path, &overrides)?;
+    let config = load_config(&cli.config, &overrides)?;
 
     let listener = TcpListener::bind(config.server.addr).await?;
 
-    let pid_file = config.server.pid_file.clone();
-    if let Some(ref path) = pid_file {
-        std::fs::write(path, std::process::id().to_string())?;
-    }
+    let _pid_guard = PidFileGuard::create(config.server.pid_file.as_deref())?;
 
     let reload_ctx = ReloadContext {
-        config_path: path,
+        config_path: cli.config,
         overrides,
     };
 
@@ -66,16 +62,37 @@ pub async fn main() -> mini_redis::Result<()> {
     )
     .await;
 
-    if let Some(ref path) = pid_file {
-        let _ = std::fs::remove_file(path);
-    }
-
     Ok(())
+}
+
+struct PidFileGuard {
+    path: std::path::PathBuf,
+}
+
+impl PidFileGuard {
+    fn create(path: Option<&std::path::Path>) -> mini_redis::Result<Option<Self>> {
+        match path {
+            Some(p) => {
+                std::fs::write(p, std::process::id().to_string())?;
+                Ok(Some(PidFileGuard { path: p.to_owned() }))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-redis-server", version, author, about = "A Redis server")]
 struct Cli {
+    #[arg(long, default_value = "mini-redis.toml")]
+    config: PathBuf,
+
     #[arg(long)]
     host: Option<String>,
 

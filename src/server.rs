@@ -163,12 +163,20 @@ pub async fn run(
     #[cfg(unix)]
     let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .expect("failed to register SIGHUP handler");
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
 
     loop {
         #[cfg(unix)]
         let reload_signal = sighup.recv();
         #[cfg(not(unix))]
         let reload_signal = std::future::pending::<Option<()>>();
+
+        #[cfg(unix)]
+        let term_signal = sigterm.recv();
+        #[cfg(not(unix))]
+        let term_signal = std::future::pending::<Option<()>>();
 
         tokio::select! {
             res = server.run() => {
@@ -184,8 +192,11 @@ pub async fn run(
                 break;
             }
             _ = &mut shutdown => {
-                // The shutdown signal has been received.
                 info!("shutting down");
+                break;
+            }
+            _ = term_signal => {
+                info!("SIGTERM received, shutting down");
                 break;
             }
             _ = reload_signal => {
@@ -246,20 +257,24 @@ fn handle_reload(
                 &new_config.client,
             );
 
-            if let ConfigChange::NoChange = change {
-                info!("configuration unchanged");
-            } else {
-                runtime_config.store(Arc::new(RuntimeConfig::new(
-                    &new_config.server,
-                    &new_config.client,
-                )));
-                *current_server = new_config.server;
-                *current_client = new_config.client;
+            match change {
+                ConfigChange::NoChange => {
+                    info!("configuration unchanged");
+                }
+                change => {
+                    runtime_config.store(Arc::new(RuntimeConfig::new(
+                        &new_config.server,
+                        &new_config.client,
+                    )));
+                    *current_server = new_config.server;
+                    *current_client = new_config.client;
 
-                if let ConfigChange::ListenerChanged = change {
-                    info!("configuration reloaded (listener changes require restart to take effect)");
-                } else {
-                    info!("configuration reloaded");
+                    match change {
+                        ConfigChange::ListenerChanged => {
+                            info!("configuration reloaded (listener changes require restart to take effect)");
+                        }
+                        _ => info!("configuration reloaded"),
+                    }
                 }
             }
         }

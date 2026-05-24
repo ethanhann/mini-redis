@@ -82,7 +82,7 @@ impl Client {
 
         // Initialize the connection state. This allocates read/write buffers to
         // perform redis protocol frame parsing.
-        let connection = Connection::new(socket, 4 * 1024);
+        let connection = Connection::new(socket, crate::conf::DEFAULT_READ_BUFFER_BYTES);
 
         Ok(Client { connection })
     }

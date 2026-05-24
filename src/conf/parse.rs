@@ -2,8 +2,7 @@ use crate::Error;
 use serde::Deserialize;
 use std::path::Path;
 
-use super::types::specification::client::ClientSpec;
-use super::types::specification::server::ServerSpec;
+use super::types::{ClientSpec, ServerSpec};
 
 #[derive(Default, Deserialize)]
 #[serde(default)]

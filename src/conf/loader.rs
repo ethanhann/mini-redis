@@ -4,8 +4,6 @@ use std::path::Path;
 
 use super::lower::lower_config;
 use super::parse::parse_config_file;
-use super::types::runtime::client_config::ClientConfig;
-use super::types::runtime::server_config::ServerConfig;
 
 #[derive(Default, Clone)]
 pub struct ConfigOverrides {
@@ -14,9 +12,8 @@ pub struct ConfigOverrides {
 }
 
 pub struct ResolvedConfig {
-    pub server: ServerConfig,
-    pub client: ClientConfig,
-    pub report: Option<ValidationReport<SimpleOrigin>>,
+    pub server: super::types::ServerConfig,
+    pub client: super::types::ClientConfig,
 }
 
 pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedConfig, Error> {
@@ -65,5 +62,5 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedC
     // Lower
     //-------------------------------------------------------------------------
 
-    lower_config(server_spec, client_spec, report)
+    lower_config(server_spec, client_spec)
 }

@@ -1,5 +1,4 @@
-use super::types::runtime::client_config::ClientConfig;
-use super::types::runtime::server_config::ServerConfig;
+use super::types::{ClientConfig, ServerConfig};
 
 pub enum ConfigChange {
     NoChange,

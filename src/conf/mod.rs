@@ -6,7 +6,7 @@ pub mod types;
 
 pub use diff::{classify_config_change, ConfigChange};
 pub use loader::{load_config, ConfigOverrides, ResolvedConfig};
-pub use types::runtime::client_config::ClientConfig;
-pub use types::runtime::server_config::ServerConfig;
-pub use types::specification::client::ClientSpec;
-pub use types::specification::server::ServerSpec;
+pub use types::{
+    ClientConfig, ClientSpec, ServerConfig, ServerSpec, DEFAULT_PUB_SUB_CHANNEL_CAPACITY,
+    DEFAULT_READ_BUFFER_BYTES,
+};

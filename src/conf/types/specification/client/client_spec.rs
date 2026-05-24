@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-#[derive(PartialEq)]
+pub const DEFAULT_READ_BUFFER_BYTES: usize = 4096;
+pub const DEFAULT_PUB_SUB_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Deserialize)]
 #[serde(default)]
 pub struct ClientSpec {
@@ -20,8 +22,8 @@ pub struct ClientSpec {
 impl Default for ClientSpec {
     fn default() -> Self {
         ClientSpec {
-            read_buffer_bytes: 4096,
-            pub_sub_channel_capacity: 1024,
+            read_buffer_bytes: DEFAULT_READ_BUFFER_BYTES,
+            pub_sub_channel_capacity: DEFAULT_PUB_SUB_CHANNEL_CAPACITY,
         }
     }
 }

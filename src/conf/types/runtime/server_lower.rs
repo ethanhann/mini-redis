@@ -4,8 +4,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::time::Duration;
 
-use super::server_config::ServerConfig;
-use crate::conf::types::specification::server::ServerSpec;
+use super::ServerConfig;
+use crate::conf::types::specification::ServerSpec;
 
 impl TryFrom<ServerSpec> for ServerConfig {
     type Error = Error;

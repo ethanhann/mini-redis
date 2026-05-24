@@ -1,5 +1,5 @@
-use super::client_config::ClientConfig;
-use crate::conf::types::specification::client::ClientSpec;
+use super::ClientConfig;
+use crate::conf::types::specification::ClientSpec;
 
 impl From<ClientSpec> for ClientConfig {
     fn from(spec: ClientSpec) -> Self {
