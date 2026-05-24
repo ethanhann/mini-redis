@@ -37,6 +37,10 @@ tracing-opentelemetry = { version = "0.21.0", optional = true }
 opentelemetry-aws = { version = "0.8.0", optional = true }
 # Allows you to send data to the OTel collector
 opentelemetry-otlp = { version = "0.13.0", optional = true }
+# Allows configuration files to be validated in a structured way
+confval = "0.1.0"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 
 [dev-dependencies]
 # Enable test-utilities in dev mode only. This is mostly for tests.

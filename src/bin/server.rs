@@ -6,7 +6,8 @@
 //!
 //! The `clap` crate is used for parsing arguments.
 
-use mini_redis::{server, DEFAULT_PORT};
+use std::path::PathBuf;
+use mini_redis::server;
 
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -27,18 +28,25 @@ use opentelemetry_aws::trace::XrayPropagator;
 use tracing_subscriber::{
     fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError, EnvFilter,
 };
+use mini_redis::conf::{load_config, ConfigOverrides};
 
 #[tokio::main]
 pub async fn main() -> mini_redis::Result<()> {
     set_up_logging()?;
 
     let cli = Cli::parse();
-    let port = cli.port.unwrap_or(DEFAULT_PORT);
 
-    // Bind a TCP listener
-    let listener = TcpListener::bind(&format!("127.0.0.1:{port}")).await?;
+    let overrides = ConfigOverrides {
+        hostname: cli.host,
+        port: cli.port,
+    };
 
-    server::run(listener, signal::ctrl_c()).await;
+    let path = PathBuf::from("mini-redis.toml");
+    let config = load_config(path, overrides)?;
+
+    let listener = TcpListener::bind(config.server.addr).await?;
+
+    server::run(listener, signal::ctrl_c(), config.server.max_connections).await;
 
     Ok(())
 }
@@ -46,6 +54,9 @@ pub async fn main() -> mini_redis::Result<()> {
 #[derive(Parser, Debug)]
 #[command(name = "mini-redis-server", version, author, about = "A Redis server")]
 struct Cli {
+    #[arg(long)]
+    host: Option<String>,
+
     #[arg(long)]
     port: Option<u16>,
 }
