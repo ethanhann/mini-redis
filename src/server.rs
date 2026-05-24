@@ -3,15 +3,26 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
-use crate::conf::{ClientConfig, ServerConfig};
-use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
+use arc_swap::ArcSwap;
+
+use crate::conf::{
+    classify_config_change, load_config, ClientConfig, ConfigChange, ConfigOverrides, ServerConfig,
+};
+use crate::{Command, Connection, Db, DbDropGuard, RuntimeConfig, Shutdown};
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
 use tracing::{debug, error, info, instrument};
+
+/// Context needed to re-read configuration on SIGHUP.
+pub struct ReloadContext {
+    pub config_path: PathBuf,
+    pub overrides: ConfigOverrides,
+}
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
 /// which performs the TCP listening and initialization of per-connection state.
@@ -63,7 +74,7 @@ struct Listener {
     /// is safe to exit the server process.
     shutdown_complete_tx: mpsc::Sender<()>,
 
-    read_buffer_bytes: usize,
+    runtime_config: Arc<ArcSwap<RuntimeConfig>>,
 }
 
 /// Per-connection handler. Reads requests from `connection` and applies the
@@ -109,12 +120,23 @@ struct Handler {
 ///
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
+///
+/// On Unix, SIGHUP triggers a configuration reload when a `ReloadContext` is
+/// provided. Runtime-swappable fields (read_buffer_bytes, pub_sub_channel_capacity,
+/// shutdown_timeout) take effect immediately for new connections. Listener-level
+/// fields (addr, max_connections) require a restart.
 pub async fn run(
     listener: TcpListener,
     shutdown: impl Future,
-    server_config: &ServerConfig,
-    client_config: &ClientConfig,
+    server_config: ServerConfig,
+    client_config: ClientConfig,
+    reload_ctx: Option<ReloadContext>,
 ) {
+    let runtime_config = Arc::new(ArcSwap::from_pointee(RuntimeConfig::new(
+        &server_config,
+        &client_config,
+    )));
+
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -126,49 +148,56 @@ pub async fn run(
     // Initialize the listener state
     let mut server = Listener {
         listener,
-        db_holder: DbDropGuard::new(client_config.pub_sub_channel_capacity),
+        db_holder: DbDropGuard::new(runtime_config.clone()),
         limit_connections: Arc::new(Semaphore::new(server_config.max_connections)),
         notify_shutdown,
         shutdown_complete_tx,
-        read_buffer_bytes: client_config.read_buffer_bytes,
+        runtime_config: runtime_config.clone(),
     };
 
-    let shutdown_timeout = server_config.shutdown_timeout;
+    let mut current_server = server_config;
+    let mut current_client = client_config;
 
-    // Concurrently run the server and listen for the `shutdown` signal. The
-    // server task runs until an error is encountered, so under normal
-    // circumstances, this `select!` statement runs until the `shutdown` signal
-    // is received.
-    //
-    // `select!` statements are written in the form of:
-    //
-    // ```
-    // <result of async op> = <async op> => <step to perform with result>
-    // ```
-    //
-    // All `<async op>` statements are executed concurrently. Once the **first**
-    // op completes, its associated `<step to perform with result>` is
-    // performed.
-    //
-    // The `select!` macro is a foundational building block for writing
-    // asynchronous Rust. See the API docs for more details:
-    //
-    // https://docs.rs/tokio/*/tokio/macro.select.html
-    tokio::select! {
-        res = server.run() => {
-            // If an error is received here, accepting connections from the TCP
-            // listener failed multiple times and the server is giving up and
-            // shutting down.
-            //
-            // Errors encountered when handling individual connections do not
-            // bubble up to this point.
-            if let Err(err) = res {
-                error!(cause = %err, "failed to accept");
+    tokio::pin!(shutdown);
+
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .expect("failed to register SIGHUP handler");
+
+    loop {
+        #[cfg(unix)]
+        let reload_signal = sighup.recv();
+        #[cfg(not(unix))]
+        let reload_signal = std::future::pending::<Option<()>>();
+
+        tokio::select! {
+            res = server.run() => {
+                // If an error is received here, accepting connections from the TCP
+                // listener failed multiple times and the server is giving up and
+                // shutting down.
+                //
+                // Errors encountered when handling individual connections do not
+                // bubble up to this point.
+                if let Err(err) = res {
+                    error!(cause = %err, "failed to accept");
+                }
+                break;
             }
-        }
-        _ = shutdown => {
-            // The shutdown signal has been received.
-            info!("shutting down");
+            _ = &mut shutdown => {
+                // The shutdown signal has been received.
+                info!("shutting down");
+                break;
+            }
+            _ = reload_signal => {
+                if let Some(ref ctx) = reload_ctx {
+                    handle_reload(
+                        ctx,
+                        &mut current_server,
+                        &mut current_client,
+                        &runtime_config,
+                    );
+                }
+            }
         }
     }
 
@@ -191,11 +220,52 @@ pub async fn run(
     // handle held by the listener has been dropped above, the only remaining
     // `Sender` instances are held by connection handler tasks. When those drop,
     // the `mpsc` channel will close and `recv()` will return `None`.
+    let shutdown_timeout = runtime_config.load().shutdown_timeout;
     if time::timeout(shutdown_timeout, shutdown_complete_rx.recv())
         .await
         .is_err()
     {
         info!("shutdown timeout elapsed, forcing shutdown");
+    }
+}
+
+fn handle_reload(
+    ctx: &ReloadContext,
+    current_server: &mut ServerConfig,
+    current_client: &mut ClientConfig,
+    runtime_config: &Arc<ArcSwap<RuntimeConfig>>,
+) {
+    info!("SIGHUP received, reloading configuration");
+
+    match load_config(&ctx.config_path, &ctx.overrides) {
+        Ok(new_config) => {
+            let change = classify_config_change(
+                current_server,
+                current_client,
+                &new_config.server,
+                &new_config.client,
+            );
+
+            if let ConfigChange::NoChange = change {
+                info!("configuration unchanged");
+            } else {
+                runtime_config.store(Arc::new(RuntimeConfig::new(
+                    &new_config.server,
+                    &new_config.client,
+                )));
+                *current_server = new_config.server;
+                *current_client = new_config.client;
+
+                if let ConfigChange::ListenerChanged = change {
+                    info!("configuration reloaded (listener changes require restart to take effect)");
+                } else {
+                    info!("configuration reloaded");
+                }
+            }
+        }
+        Err(e) => {
+            error!(cause = %e, "configuration reload failed, continuing with current configuration");
+        }
     }
 }
 
@@ -239,12 +309,14 @@ impl Listener {
             // error here is non-recoverable.
             let socket = self.accept().await?;
 
+            let read_buffer_bytes = self.runtime_config.load().read_buffer_bytes;
+
             // Create the necessary per-connection handler state.
             let mut handler = Handler {
                 // Get a handle to the shared database.
                 db: self.db_holder.db(),
 
-                connection: Connection::new(socket, self.read_buffer_bytes),
+                connection: Connection::new(socket, read_buffer_bytes),
 
                 // Receive shutdown notifications.
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),

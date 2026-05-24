@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use confval::{
     range_constraint, validate_range_field, RangeConstraint, SimpleOrigin, ValidateSpec,
     ValidationReport,
@@ -18,6 +20,14 @@ impl ValidateSpec<SimpleOrigin> for ServerSpec {
 
         if self.hostname.is_empty() {
             report.push(server_issues::hostname_empty(origin));
+        }
+
+        if let Some(ref pid_file) = self.pid_file {
+            if let Some(parent) = Path::new(pid_file).parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    report.push(server_issues::pid_file_parent_missing(pid_file, origin));
+                }
+            }
         }
     }
 }

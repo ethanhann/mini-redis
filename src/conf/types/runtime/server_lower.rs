@@ -1,6 +1,7 @@
 use crate::Error;
 use std::convert::TryFrom;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::time::Duration;
 
 use super::server_config::ServerConfig;
@@ -15,6 +16,7 @@ impl TryFrom<ServerSpec> for ServerConfig {
             addr,
             max_connections: spec.max_connections,
             shutdown_timeout: Duration::from_secs(spec.shutdown_timeout_secs),
+            pid_file: spec.pid_file.map(PathBuf::from),
         })
     }
 }

@@ -29,6 +29,7 @@ use tracing_subscriber::{
     fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError, EnvFilter,
 };
 use mini_redis::conf::{load_config, ConfigOverrides};
+use mini_redis::server::ReloadContext;
 
 #[tokio::main]
 pub async fn main() -> mini_redis::Result<()> {
@@ -42,11 +43,32 @@ pub async fn main() -> mini_redis::Result<()> {
     };
 
     let path = PathBuf::from("mini-redis.toml");
-    let config = load_config(path, overrides)?;
+    let config = load_config(&path, &overrides)?;
 
     let listener = TcpListener::bind(config.server.addr).await?;
 
-    server::run(listener, signal::ctrl_c(), &config.server, &config.client).await;
+    let pid_file = config.server.pid_file.clone();
+    if let Some(ref path) = pid_file {
+        std::fs::write(path, std::process::id().to_string())?;
+    }
+
+    let reload_ctx = ReloadContext {
+        config_path: path,
+        overrides,
+    };
+
+    server::run(
+        listener,
+        signal::ctrl_c(),
+        config.server,
+        config.client,
+        Some(reload_ctx),
+    )
+    .await;
+
+    if let Some(ref path) = pid_file {
+        let _ = std::fs::remove_file(path);
+    }
 
     Ok(())
 }

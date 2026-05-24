@@ -21,6 +21,11 @@ pub struct ServerSpec {
     pub max_connections: usize,
 
     pub shutdown_timeout_secs: u64,
+
+    /// Path to write the server's PID file. Used by operators to send signals
+    /// (e.g. `kill -HUP $(cat /tmp/mini-redis.pid)` for hot reload).
+    /// Set to `None` to disable PID file creation.
+    pub pid_file: Option<String>,
 }
 
 impl Default for ServerSpec {
@@ -30,6 +35,7 @@ impl Default for ServerSpec {
             port: 6379,
             max_connections: 250,
             shutdown_timeout_secs: 30,
+            pid_file: None,
         }
     }
 }

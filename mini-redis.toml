@@ -3,6 +3,7 @@ hostname = "127.0.0.1"
 port = 6379
 max_connections = 250
 shutdown_timeout_secs = 30
+pid_file = "/tmp/mini-redis.pid"
 
 [client]
 read_buffer_bytes = 4096

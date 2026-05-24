@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, Notify};
 use tokio::time::{self, Duration, Instant};
 
@@ -5,6 +6,8 @@ use bytes::Bytes;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use tracing::debug;
+
+use crate::RuntimeConfig;
 
 /// A wrapper around a `Db` instance. This exists to allow orderly cleanup
 /// of the `Db` by signalling the background purge task to shut down when
@@ -56,7 +59,7 @@ struct Shared {
     /// shutdown signal.
     background_task: Notify,
 
-    pub_sub_channel_capacity: usize,
+    runtime_config: Arc<ArcSwap<RuntimeConfig>>,
 }
 
 #[derive(Debug)]
@@ -101,9 +104,9 @@ struct Entry {
 impl DbDropGuard {
     /// Create a new `DbDropGuard`, wrapping a `Db` instance. When this is dropped
     /// the `Db`'s purge task will be shut down.
-    pub(crate) fn new(pub_sub_channel_capacity: usize) -> DbDropGuard {
+    pub(crate) fn new(runtime_config: Arc<ArcSwap<RuntimeConfig>>) -> DbDropGuard {
         DbDropGuard {
-            db: Db::new(pub_sub_channel_capacity),
+            db: Db::new(runtime_config),
         }
     }
 
@@ -124,7 +127,7 @@ impl Drop for DbDropGuard {
 impl Db {
     /// Create a new, empty, `Db` instance. Allocates shared state and spawns a
     /// background task to manage key expiration.
-    pub(crate) fn new(pub_sub_channel_capacity: usize) -> Db {
+    pub(crate) fn new(runtime_config: Arc<ArcSwap<RuntimeConfig>>) -> Db {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 entries: HashMap::new(),
@@ -133,7 +136,7 @@ impl Db {
                 shutdown: false,
             }),
             background_task: Notify::new(),
-            pub_sub_channel_capacity,
+            runtime_config,
         });
 
         // Start the background task.
@@ -239,7 +242,8 @@ impl Db {
         match state.pub_sub.entry(key) {
             Entry::Occupied(e) => e.get().subscribe(),
             Entry::Vacant(e) => {
-                let (tx, rx) = broadcast::channel(self.shared.pub_sub_channel_capacity);
+                let capacity = self.shared.runtime_config.load().pub_sub_channel_capacity;
+                let (tx, rx) = broadcast::channel(capacity);
                 e.insert(tx);
                 rx
             }

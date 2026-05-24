@@ -34,7 +34,7 @@ async fn start_server() -> (SocketAddr, JoinHandle<()>) {
     let client_config = ClientConfig::from(ClientSpec::default());
 
     let handle = tokio::spawn(async move {
-        server::run(listener, tokio::signal::ctrl_c(), &server_config, &client_config).await
+        server::run(listener, tokio::signal::ctrl_c(), server_config, client_config, None).await
     });
 
     (addr, handle)

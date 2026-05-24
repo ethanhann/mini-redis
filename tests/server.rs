@@ -447,7 +447,7 @@ async fn start_server() -> SocketAddr {
     let client_config = ClientConfig::from(ClientSpec::default());
 
     tokio::spawn(async move {
-        server::run(listener, tokio::signal::ctrl_c(), &server_config, &client_config).await
+        server::run(listener, tokio::signal::ctrl_c(), server_config, client_config, None).await
     });
 
     addr
