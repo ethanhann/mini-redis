@@ -46,7 +46,7 @@ pub async fn main() -> mini_redis::Result<()> {
 
     let listener = TcpListener::bind(config.server.addr).await?;
 
-    server::run(listener, signal::ctrl_c(), config.server.max_connections).await;
+    server::run(listener, signal::ctrl_c(), &config.server, &config.client).await;
 
     Ok(())
 }

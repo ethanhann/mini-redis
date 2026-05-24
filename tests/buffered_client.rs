@@ -1,7 +1,9 @@
+use mini_redis::conf::{ClientConfig, ClientSpec, ServerConfig, ServerSpec};
 use mini_redis::{
     clients::{BufferedClient, Client},
     server,
 };
+use std::convert::TryFrom;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -26,9 +28,14 @@ async fn pool_key_value_get_set() {
 async fn start_server() -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let max_connections = 250;
 
-    let handle = tokio::spawn(async move { server::run(listener, tokio::signal::ctrl_c(), max_connections).await });
+    let mut server_config = ServerConfig::try_from(ServerSpec::default()).unwrap();
+    server_config.addr = addr;
+    let client_config = ClientConfig::from(ClientSpec::default());
+
+    let handle = tokio::spawn(async move {
+        server::run(listener, tokio::signal::ctrl_c(), &server_config, &client_config).await
+    });
 
     (addr, handle)
 }

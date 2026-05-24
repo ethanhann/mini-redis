@@ -3,6 +3,7 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
+use crate::conf::{ClientConfig, ServerConfig};
 use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
 
 use std::future::Future;
@@ -61,6 +62,8 @@ struct Listener {
     /// `shutdown_complete_rx.recv()` completing with `None`. At this point, it
     /// is safe to exit the server process.
     shutdown_complete_tx: mpsc::Sender<()>,
+
+    read_buffer_bytes: usize,
 }
 
 /// Per-connection handler. Reads requests from `connection` and applies the
@@ -106,7 +109,12 @@ struct Handler {
 ///
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
-pub async fn run(listener: TcpListener, shutdown: impl Future, max_connections: usize) {
+pub async fn run(
+    listener: TcpListener,
+    shutdown: impl Future,
+    server_config: &ServerConfig,
+    client_config: &ClientConfig,
+) {
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -118,11 +126,14 @@ pub async fn run(listener: TcpListener, shutdown: impl Future, max_connections: 
     // Initialize the listener state
     let mut server = Listener {
         listener,
-        db_holder: DbDropGuard::new(),
-        limit_connections: Arc::new(Semaphore::new(max_connections)),
+        db_holder: DbDropGuard::new(client_config.pub_sub_channel_capacity),
+        limit_connections: Arc::new(Semaphore::new(server_config.max_connections)),
         notify_shutdown,
         shutdown_complete_tx,
+        read_buffer_bytes: client_config.read_buffer_bytes,
     };
+
+    let shutdown_timeout = server_config.shutdown_timeout;
 
     // Concurrently run the server and listen for the `shutdown` signal. The
     // server task runs until an error is encountered, so under normal
@@ -180,7 +191,12 @@ pub async fn run(listener: TcpListener, shutdown: impl Future, max_connections: 
     // handle held by the listener has been dropped above, the only remaining
     // `Sender` instances are held by connection handler tasks. When those drop,
     // the `mpsc` channel will close and `recv()` will return `None`.
-    let _ = shutdown_complete_rx.recv().await;
+    if time::timeout(shutdown_timeout, shutdown_complete_rx.recv())
+        .await
+        .is_err()
+    {
+        info!("shutdown timeout elapsed, forcing shutdown");
+    }
 }
 
 impl Listener {
@@ -228,9 +244,7 @@ impl Listener {
                 // Get a handle to the shared database.
                 db: self.db_holder.db(),
 
-                // Initialize the connection state. This allocates read/write
-                // buffers to perform redis protocol frame parsing.
-                connection: Connection::new(socket),
+                connection: Connection::new(socket, self.read_buffer_bytes),
 
                 // Receive shutdown notifications.
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
