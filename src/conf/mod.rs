@@ -1,6 +1,5 @@
 mod diff;
 mod loader;
-mod lower;
 mod parse;
 pub mod types;
 

@@ -1,17 +1,17 @@
-use crate::Error;
-use serde::Deserialize;
-use std::path::Path;
+use confval::source::Located;
 
 use super::types::{ClientSpec, ServerSpec};
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
+/// The top-level configuration file: a `[server]` block and a `[client]` block.
+///
+/// Both map to TOML tables, which the confval frontend lowers into nested
+/// blocks. Each block is parsed through its own derived `FromFields` impl, so a
+/// shape error in one does not hide errors in the other.
+#[derive(confval::Spec)]
 pub(super) struct ConfigFile {
-    pub server: ServerSpec,
-    pub client: ClientSpec,
-}
+    #[confval(nested)]
+    pub server: Located<ServerSpec>,
 
-pub(super) fn parse_config_file(path: &Path) -> Result<ConfigFile, Error> {
-    let contents = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&contents)?)
+    #[confval(nested)]
+    pub client: Located<ClientSpec>,
 }

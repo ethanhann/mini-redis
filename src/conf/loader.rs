@@ -1,9 +1,12 @@
-use crate::Error;
-use confval::{SimpleOrigin, ValidateSpec, ValidationReport};
 use std::path::Path;
 
-use super::lower::lower_config;
-use super::parse::parse_config_file;
+use confval::format::toml::parse_toml;
+use confval::prelude::*;
+
+use crate::Error;
+
+use super::parse::ConfigFile;
+use super::types::{ClientConfig, ServerConfig};
 
 #[derive(Default, Clone)]
 pub struct ConfigOverrides {
@@ -12,8 +15,8 @@ pub struct ConfigOverrides {
 }
 
 pub struct ResolvedConfig {
-    pub server: super::types::ServerConfig,
-    pub client: super::types::ClientConfig,
+    pub server: ServerConfig,
+    pub client: ClientConfig,
 }
 
 pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedConfig, Error> {
@@ -21,46 +24,59 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedC
         return Err(format!("config file does not exist: {}", path.display()).into());
     }
 
-    //-------------------------------------------------------------------------
-    // Parse
-    //-------------------------------------------------------------------------
-
-    let file = parse_config_file(path)?;
-    let mut server_spec = file.server;
-    let client_spec = file.client;
-
-    if let Some(ref hostname) = overrides.hostname {
-        server_spec.hostname = hostname.clone();
-    }
-    if let Some(port) = overrides.port {
-        server_spec.port = port;
-    }
-
-    let origin = SimpleOrigin::new(path.to_string_lossy(), "server");
+    let text = std::fs::read_to_string(path)?;
 
     //-------------------------------------------------------------------------
-    // Validate
+    // Parse (structural): the frontend builds a span-carrying field model and
+    // the derived `FromFields` walk turns it into the spec.
     //-------------------------------------------------------------------------
 
-    let mut report = ValidationReport::default();
-    server_spec.validate(&origin, &mut report);
+    let mut sources = SourceMap::new();
+    let id = sources.add(path.to_string_lossy(), text);
+    let mut report = Report::new();
 
-    let client_origin = SimpleOrigin::new(path.to_string_lossy(), "client");
-    client_spec.validate(&client_origin, &mut report);
+    let parsed: Option<ConfigFile> = parse_toml(&sources, id, &mut report);
+
+    let resolved = parsed.and_then(|mut file| {
+        //---------------------------------------------------------------------
+        // Apply CLI overrides on the parsed spec. A detached span marks a value
+        // that did not come from the source file.
+        //---------------------------------------------------------------------
+
+        if let Some(hostname) = &overrides.hostname {
+            file.server.value.hostname = Located::detached(hostname.clone());
+        }
+        if let Some(port) = overrides.port {
+            file.server.value.port = Located::detached(port as i64);
+        }
+
+        //---------------------------------------------------------------------
+        // Validate (semantic): ranges, closed sets, and cross-field rules,
+        // each reported at the span its field already carries.
+        //---------------------------------------------------------------------
+
+        file.server.value.validate(&mut report);
+        file.client.value.validate(&mut report);
+
+        //---------------------------------------------------------------------
+        // Gate, then lower. Narrowing in the lowering functions is safe only
+        // because lowering does not run on a report that has errors.
+        //---------------------------------------------------------------------
+
+        if report.has_errors() {
+            return None;
+        }
+
+        let server = ServerConfig::lower(&file.server.value, &mut report)?;
+        let client = ClientConfig::lower(&file.client.value, &mut report)?;
+        Some(ResolvedConfig { server, client })
+    });
 
     if report.has_issues() {
         let mut out = String::new();
-        report.render_pretty(&mut out)?;
+        report.render_pretty(&sources, &mut out)?;
         eprint!("{out}");
     }
 
-    if report.has_errors() {
-        return Err("config validation failed".into());
-    }
-
-    //-------------------------------------------------------------------------
-    // Lower
-    //-------------------------------------------------------------------------
-
-    lower_config(server_spec, client_spec)
+    resolved.ok_or_else(|| "config validation failed".into())
 }
