@@ -6,6 +6,7 @@ use confval::pipeline::narrow;
 use confval::prelude::*;
 
 use crate::conf::types::specification::ServerSpec;
+use crate::conf::validation::validator::net::to_socket_addr;
 
 #[derive(Debug, PartialEq, confval::Config)]
 #[confval(lower_from = ServerSpec, validate)]
@@ -31,30 +32,6 @@ impl ServerConfig {
     }
 }
 
-fn to_socket_addr(
-    hostname: &Located<String>,
-    port: &Located<i64>,
-    report: &mut Report,
-) -> Option<SocketAddr> {
-    match format!("{}:{}", hostname.value, port.value).parse::<SocketAddr>() {
-        Ok(addr) => Some(addr),
-        Err(_) => {
-            report
-                .error(format!(
-                    "invalid address: {}:{}",
-                    hostname.value, port.value
-                ))
-                .at(hostname.span)
-                .help("Set hostname to an IP address or resolvable host, e.g. \"127.0.0.1\".")
-                .emit();
-            None
-        }
-    }
-}
-
-fn to_pid_path(
-    value: &Option<Located<String>>,
-    _report: &mut Report,
-) -> Option<Option<PathBuf>> {
+fn to_pid_path(value: &Option<Located<String>>, _report: &mut Report) -> Option<Option<PathBuf>> {
     Some(value.as_ref().map(|located| PathBuf::from(&located.value)))
 }

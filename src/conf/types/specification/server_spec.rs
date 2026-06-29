@@ -2,7 +2,8 @@ use confval::diagnostic::Report;
 use confval::pipeline::Validate;
 use confval::source::Located;
 use confval::{range_constraint, RangeConstraint};
-use std::path::Path;
+
+use crate::conf::validation::validator::{net, path};
 
 #[derive(confval::Spec)]
 pub struct ServerSpec {
@@ -54,6 +55,20 @@ range_constraint!(SHUTDOWN_TIMEOUT, i64, min: 1, max: 3600, units: "s", help: "K
 
 impl Validate for ServerSpec {
     fn validate(&self, report: &mut Report) {
+        if self.hostname.value.is_empty() {
+            report
+                .error("hostname cannot be empty")
+                .at(self.hostname.span)
+                .help("Set hostname to a valid DNS name or IP address.")
+                .emit();
+        } else {
+            // Validate the address here so a bad hostname is collected during
+            // spec validation rather than only surfacing at lowering, which the
+            // error gate skips. The parsed value is discarded; lowering parses
+            // it again through the same shared validator.
+            net::to_socket_addr(&self.hostname, &self.port, report);
+        }
+
         PORT.check_located(&self.port, "port", report);
         MAX_CONNECTIONS.check_located(&self.max_connections, "max_connections", report);
         SHUTDOWN_TIMEOUT.check_located(
@@ -62,27 +77,8 @@ impl Validate for ServerSpec {
             report,
         );
 
-        if self.hostname.value.is_empty() {
-            report
-                .error("hostname cannot be empty")
-                .at(self.hostname.span)
-                .help("Set hostname to a valid DNS name or IP address.")
-                .emit();
-        }
-
         if let Some(pid_file) = &self.pid_file {
-            if let Some(parent) = Path::new(&pid_file.value).parent() {
-                if !parent.as_os_str().is_empty() && !parent.exists() {
-                    report
-                        .error(format!(
-                            "pid_file parent directory does not exist: {}",
-                            pid_file.value
-                        ))
-                        .at(pid_file.span)
-                        .help("Create the parent directory or choose a path under an existing directory.")
-                        .emit();
-                }
-            }
+            path::parent_exists(pid_file, "pid_file", report);
         }
     }
 }
