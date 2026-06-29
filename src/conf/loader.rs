@@ -6,7 +6,7 @@ use confval::prelude::*;
 use crate::Error;
 
 use super::parse::ConfigFile;
-use super::types::{ClientConfig, ServerConfig};
+use super::types::ServerConfig;
 
 #[derive(Default, Clone)]
 pub struct ConfigOverrides {
@@ -14,12 +14,7 @@ pub struct ConfigOverrides {
     pub port: Option<u16>,
 }
 
-pub struct ResolvedConfig {
-    pub server: ServerConfig,
-    pub client: ClientConfig,
-}
-
-pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedConfig, Error> {
+pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ServerConfig, Error> {
     if !path.exists() {
         return Err(format!("config file does not exist: {}", path.display()).into());
     }
@@ -56,7 +51,6 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedC
         //---------------------------------------------------------------------
 
         file.server.value.validate(&mut report);
-        file.client.value.validate(&mut report);
 
         //---------------------------------------------------------------------
         // Gate, then lower. Narrowing in the lowering functions is safe only
@@ -67,9 +61,7 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ResolvedC
             return None;
         }
 
-        let server = ServerConfig::lower(&file.server.value, &mut report)?;
-        let client = ClientConfig::lower(&file.client.value, &mut report)?;
-        Some(ResolvedConfig { server, client })
+        ServerConfig::lower(&file.server.value, &mut report)
     });
 
     if report.has_issues() {

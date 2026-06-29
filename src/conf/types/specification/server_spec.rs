@@ -31,6 +31,14 @@ pub struct ServerSpec {
     #[confval(default = 30)]
     pub shutdown_timeout_secs: Located<i64>,
 
+    /// Capacity of each pub/sub broadcast channel. A message is stored in the
+    /// channel until all subscribers have seen it, so a slow subscriber could
+    /// result in messages being held indefinitely. When the channel's capacity
+    /// fills up, publishing will result in old messages being dropped. This
+    /// prevents slow consumers from blocking the entire system.
+    #[confval(default = 1024)]
+    pub pub_sub_channel_capacity: Located<i64>,
+
     /// Path to write the server's PID file. Used by operators to send signals
     /// (e.g. `kill -HUP $(cat /tmp/mini-redis.pid)` for hot reload).
     /// Set to `None` to disable PID file creation.
@@ -44,14 +52,18 @@ impl Default for ServerSpec {
             port: Located::detached(6379),
             max_connections: Located::detached(250),
             shutdown_timeout_secs: Located::detached(30),
+            pub_sub_channel_capacity: Located::detached(DEFAULT_PUB_SUB_CHANNEL_CAPACITY as i64),
             pid_file: None,
         }
     }
 }
 
+pub const DEFAULT_PUB_SUB_CHANNEL_CAPACITY: usize = 1024;
+
 range_constraint!(PORT, i64, min: 1, max: 65535);
 range_constraint!(MAX_CONNECTIONS, i64, min: 1, max: 250, help: "A friendly reminder that this is not a production server ;)");
 range_constraint!(SHUTDOWN_TIMEOUT, i64, min: 1, max: 3600, units: "s", help: "Keep this under an hour for responsive shutdowns.");
+range_constraint!(PUB_SUB_CAPACITY, i64, min: 1, max: 65536, help: "Large capacities hold more messages for slow subscribers but use more memory.");
 
 impl Validate for ServerSpec {
     fn validate(&self, report: &mut Report) {
@@ -74,6 +86,11 @@ impl Validate for ServerSpec {
         SHUTDOWN_TIMEOUT.check_located(
             &self.shutdown_timeout_secs,
             "shutdown_timeout_secs",
+            report,
+        );
+        PUB_SUB_CAPACITY.check_located(
+            &self.pub_sub_channel_capacity,
+            "pub_sub_channel_capacity",
             report,
         );
 

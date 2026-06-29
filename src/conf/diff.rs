@@ -1,4 +1,4 @@
-use super::types::{ClientConfig, ServerConfig};
+use super::types::ServerConfig;
 
 pub enum ConfigChange {
     NoChange,
@@ -8,11 +8,9 @@ pub enum ConfigChange {
 
 pub fn classify_config_change(
     old_server: &ServerConfig,
-    old_client: &ClientConfig,
     new_server: &ServerConfig,
-    new_client: &ClientConfig,
 ) -> ConfigChange {
-    if old_server == new_server && old_client == new_client {
+    if old_server == new_server {
         return ConfigChange::NoChange;
     }
 

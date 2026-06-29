@@ -42,25 +42,18 @@ pub async fn main() -> mini_redis::Result<()> {
         port: cli.port,
     };
 
-    let config = load_config(&cli.config, &overrides)?;
+    let server_config = load_config(&cli.config, &overrides)?;
 
-    let listener = TcpListener::bind(config.server.addr).await?;
+    let listener = TcpListener::bind(server_config.addr).await?;
 
-    let _pid_guard = PidFileGuard::create(config.server.pid_file.as_deref())?;
+    let _pid_guard = PidFileGuard::create(server_config.pid_file.as_deref())?;
 
     let reload_ctx = ReloadContext {
         config_path: cli.config,
         overrides,
     };
 
-    server::run(
-        listener,
-        signal::ctrl_c(),
-        config.server,
-        config.client,
-        Some(reload_ctx),
-    )
-    .await;
+    server::run(listener, signal::ctrl_c(), server_config, Some(reload_ctx)).await;
 
     Ok(())
 }

@@ -6,7 +6,7 @@
 use arc_swap::ArcSwap;
 
 use crate::conf::{
-    classify_config_change, load_config, ClientConfig, ConfigChange, ConfigOverrides, ServerConfig,
+    classify_config_change, load_config, ConfigChange, ConfigOverrides, ServerConfig,
 };
 use crate::{Command, Connection, Db, DbDropGuard, RuntimeConfig, Shutdown};
 
@@ -73,8 +73,6 @@ struct Listener {
     /// `shutdown_complete_rx.recv()` completing with `None`. At this point, it
     /// is safe to exit the server process.
     shutdown_complete_tx: mpsc::Sender<()>,
-
-    runtime_config: Arc<ArcSwap<RuntimeConfig>>,
 }
 
 /// Per-connection handler. Reads requests from `connection` and applies the
@@ -122,20 +120,16 @@ struct Handler {
 /// listen for a SIGINT signal.
 ///
 /// On Unix, SIGHUP triggers a configuration reload when a `ReloadContext` is
-/// provided. Runtime-swappable fields (read_buffer_bytes, pub_sub_channel_capacity,
+/// provided. Runtime-swappable fields (pub_sub_channel_capacity,
 /// shutdown_timeout) take effect immediately for new connections. Listener-level
 /// fields (addr, max_connections) require a restart.
 pub async fn run(
     listener: TcpListener,
     shutdown: impl Future,
     server_config: ServerConfig,
-    client_config: ClientConfig,
     reload_ctx: Option<ReloadContext>,
 ) {
-    let runtime_config = Arc::new(ArcSwap::from_pointee(RuntimeConfig::new(
-        &server_config,
-        &client_config,
-    )));
+    let runtime_config = Arc::new(ArcSwap::from_pointee(RuntimeConfig::new(&server_config)));
 
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
@@ -152,11 +146,9 @@ pub async fn run(
         limit_connections: Arc::new(Semaphore::new(server_config.max_connections)),
         notify_shutdown,
         shutdown_complete_tx,
-        runtime_config: runtime_config.clone(),
     };
 
     let mut current_server = server_config;
-    let mut current_client = client_config;
 
     tokio::pin!(shutdown);
 
@@ -201,12 +193,7 @@ pub async fn run(
             }
             _ = reload_signal => {
                 if let Some(ref ctx) = reload_ctx {
-                    handle_reload(
-                        ctx,
-                        &mut current_server,
-                        &mut current_client,
-                        &runtime_config,
-                    );
+                    handle_reload(ctx, &mut current_server, &runtime_config);
                 }
             }
         }
@@ -243,31 +230,21 @@ pub async fn run(
 fn handle_reload(
     ctx: &ReloadContext,
     current_server: &mut ServerConfig,
-    current_client: &mut ClientConfig,
     runtime_config: &Arc<ArcSwap<RuntimeConfig>>,
 ) {
     info!("SIGHUP received, reloading configuration");
 
     match load_config(&ctx.config_path, &ctx.overrides) {
-        Ok(new_config) => {
-            let change = classify_config_change(
-                current_server,
-                current_client,
-                &new_config.server,
-                &new_config.client,
-            );
+        Ok(new_server) => {
+            let change = classify_config_change(current_server, &new_server);
 
             match change {
                 ConfigChange::NoChange => {
                     info!("configuration unchanged");
                 }
                 change => {
-                    runtime_config.store(Arc::new(RuntimeConfig::new(
-                        &new_config.server,
-                        &new_config.client,
-                    )));
-                    *current_server = new_config.server;
-                    *current_client = new_config.client;
+                    runtime_config.store(Arc::new(RuntimeConfig::new(&new_server)));
+                    *current_server = new_server;
 
                     match change {
                         ConfigChange::ListenerChanged => {
@@ -324,14 +301,12 @@ impl Listener {
             // error here is non-recoverable.
             let socket = self.accept().await?;
 
-            let read_buffer_bytes = self.runtime_config.load().read_buffer_bytes;
-
             // Create the necessary per-connection handler state.
             let mut handler = Handler {
                 // Get a handle to the shared database.
                 db: self.db_holder.db(),
 
-                connection: Connection::new(socket, read_buffer_bytes),
+                connection: Connection::new(socket),
 
                 // Receive shutdown notifications.
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),

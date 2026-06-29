@@ -5,8 +5,5 @@ pub mod types;
 mod validation;
 
 pub use diff::{classify_config_change, ConfigChange};
-pub use loader::{load_config, ConfigOverrides, ResolvedConfig};
-pub use types::{
-    ClientConfig, ClientSpec, ServerConfig, ServerSpec, DEFAULT_PUB_SUB_CHANNEL_CAPACITY,
-    DEFAULT_READ_BUFFER_BYTES,
-};
+pub use loader::{load_config, ConfigOverrides};
+pub use types::{ServerConfig, ServerSpec};

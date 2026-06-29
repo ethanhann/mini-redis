@@ -3,8 +3,5 @@ hostname = "127.0.0."
 port = 3000000000
 max_connections = 251
 shutdown_timeout_secs = 0
-pid_file = "/doesnotexist/mini-redis.pid"
-
-[client]
-read_buffer_bytes = 0
 pub_sub_channel_capacity = 0
+pid_file = "/doesnotexist/mini-redis.pid"

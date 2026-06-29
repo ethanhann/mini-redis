@@ -20,6 +20,9 @@ pub struct ServerConfig {
     #[confval(lower(from = shutdown_timeout_secs, with = narrow::i64_secs_to_duration))]
     pub shutdown_timeout: Duration,
 
+    #[confval(lower(from = pub_sub_channel_capacity, with = narrow::i64_to_usize))]
+    pub pub_sub_channel_capacity: usize,
+
     #[confval(lower(from = pid_file, with = to_pid_path))]
     pub pid_file: Option<PathBuf>,
 }
