@@ -9,7 +9,7 @@ use crate::conf::types::specification::ServerSpec;
 use crate::conf::validation::validator::net::to_socket_addr;
 
 #[derive(Debug, PartialEq, confval::Config)]
-#[confval(lower_from = ServerSpec, validate)]
+#[confval(lower_from = ServerSpec)]
 pub struct ServerConfig {
     #[confval(lower(from = (hostname, port), with = to_socket_addr))]
     pub addr: SocketAddr,
