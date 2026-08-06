@@ -6,7 +6,8 @@
 //!
 //! The `clap` crate is used for parsing arguments.
 
-use mini_redis::{server, DEFAULT_PORT};
+use std::path::PathBuf;
+use mini_redis::server;
 
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -27,27 +28,110 @@ use opentelemetry_aws::trace::XrayPropagator;
 use tracing_subscriber::{
     fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError, EnvFilter,
 };
+use mini_redis::conf::{load_config, render_config, render_template, ConfigOverrides, ConfigView};
+use mini_redis::server::ReloadContext;
 
 #[tokio::main]
 pub async fn main() -> mini_redis::Result<()> {
     set_up_logging()?;
 
     let cli = Cli::parse();
-    let port = cli.port.unwrap_or(DEFAULT_PORT);
 
-    // Bind a TCP listener
-    let listener = TcpListener::bind(&format!("127.0.0.1:{port}")).await?;
+    // These two flags print and exit instead of starting a server, so they are
+    // handled before the listener binds.
+    if cli.print_template {
+        print!("{}", render_template()?);
+        return Ok(());
+    }
 
-    server::run(listener, signal::ctrl_c()).await;
+    let overrides = ConfigOverrides {
+        hostname: cli.host,
+        port: cli.port,
+    };
+
+    if let Some(view) = cli.print_config {
+        print!("{}", render_config(&cli.config, &overrides, view.into())?);
+        return Ok(());
+    }
+
+    let server_config = load_config(&cli.config, &overrides)?;
+
+    let listener = TcpListener::bind(server_config.addr).await?;
+
+    let _pid_guard = PidFileGuard::create(server_config.pid_file.as_deref())?;
+
+    let reload_ctx = ReloadContext {
+        config_path: cli.config,
+        overrides,
+    };
+
+    server::run(listener, signal::ctrl_c(), server_config, Some(reload_ctx)).await;
 
     Ok(())
+}
+
+struct PidFileGuard {
+    path: std::path::PathBuf,
+}
+
+impl PidFileGuard {
+    fn create(path: Option<&std::path::Path>) -> mini_redis::Result<Option<Self>> {
+        match path {
+            Some(p) => {
+                std::fs::write(p, std::process::id().to_string())?;
+                Ok(Some(PidFileGuard { path: p.to_owned() }))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "mini-redis-server", version, author, about = "A Redis server")]
 struct Cli {
+    #[arg(long, default_value = "mini-redis.toml")]
+    config: PathBuf,
+
+    #[arg(long)]
+    host: Option<String>,
+
     #[arg(long)]
     port: Option<u16>,
+
+    /// Print a documented configuration file generated from the spec, then
+    /// exit. Redirect it to a file to start a new configuration.
+    #[arg(long)]
+    print_template: bool,
+
+    /// Print the configuration this server would run with, then exit. `source`
+    /// shows only what the file set, `populated` fills in the defaults.
+    #[arg(long, value_name = "VIEW")]
+    print_config: Option<ConfigViewArg>,
+}
+
+/// A copy of [`ConfigView`] that `clap` can parse.
+///
+/// `clap` derives argument parsing from the type itself, so the flag needs its
+/// own enum here rather than a `clap` dependency on the conf module.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ConfigViewArg {
+    Source,
+    Populated,
+}
+
+impl From<ConfigViewArg> for ConfigView {
+    fn from(value: ConfigViewArg) -> Self {
+        match value {
+            ConfigViewArg::Source => ConfigView::Source,
+            ConfigViewArg::Populated => ConfigView::Populated,
+        }
+    }
 }
 
 #[cfg(not(feature = "otel"))]

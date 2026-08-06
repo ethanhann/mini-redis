@@ -1,3 +1,4 @@
+use mini_redis::conf::ServerConfig;
 use mini_redis::{clients::Client, server};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -108,7 +109,17 @@ async fn start_server() -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let handle = tokio::spawn(async move { server::run(listener, tokio::signal::ctrl_c()).await });
+    let server_config = ServerConfig {
+        addr,
+        max_connections: 250,
+        shutdown_timeout: std::time::Duration::from_secs(30),
+        pub_sub_channel_capacity: 1024,
+        pid_file: None,
+    };
+
+    let handle = tokio::spawn(async move {
+        server::run(listener, tokio::signal::ctrl_c(), server_config, None).await
+    });
 
     (addr, handle)
 }

@@ -3,14 +3,26 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
-use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
+use arc_swap::ArcSwap;
+
+use crate::conf::{
+    classify_config_change, load_config, ConfigChange, ConfigOverrides, ServerConfig,
+};
+use crate::{Command, Connection, Db, DbDropGuard, RuntimeConfig, Shutdown};
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
 use tracing::{debug, error, info, instrument};
+
+/// Context needed to re-read configuration on SIGHUP.
+pub struct ReloadContext {
+    pub config_path: PathBuf,
+    pub overrides: ConfigOverrides,
+}
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
 /// which performs the TCP listening and initialization of per-connection state.
@@ -97,20 +109,6 @@ struct Handler {
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-/// Maximum number of concurrent connections the redis server will accept.
-///
-/// When this limit is reached, the server will stop accepting connections until
-/// an active connection terminates.
-///
-/// A real application will want to make this value configurable, but for this
-/// example, it is hard coded.
-///
-/// This is also set to a pretty low value to discourage using this in
-/// production (you'd think that all the disclaimers would make it obvious that
-/// this is not a serious project... but I thought that about mini-http as
-/// well).
-const MAX_CONNECTIONS: usize = 250;
-
 /// Run the mini-redis server.
 ///
 /// Accepts connections from the supplied listener. For each inbound connection,
@@ -120,7 +118,19 @@ const MAX_CONNECTIONS: usize = 250;
 ///
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
-pub async fn run(listener: TcpListener, shutdown: impl Future) {
+///
+/// On Unix, SIGHUP triggers a configuration reload when a `ReloadContext` is
+/// provided. Runtime-swappable fields (pub_sub_channel_capacity,
+/// shutdown_timeout) take effect immediately for new connections. Listener-level
+/// fields (addr, max_connections) require a restart.
+pub async fn run(
+    listener: TcpListener,
+    shutdown: impl Future,
+    server_config: ServerConfig,
+    reload_ctx: Option<ReloadContext>,
+) {
+    let runtime_config = Arc::new(ArcSwap::from_pointee(RuntimeConfig::new(&server_config)));
+
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -132,46 +142,60 @@ pub async fn run(listener: TcpListener, shutdown: impl Future) {
     // Initialize the listener state
     let mut server = Listener {
         listener,
-        db_holder: DbDropGuard::new(),
-        limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        db_holder: DbDropGuard::new(runtime_config.clone()),
+        limit_connections: Arc::new(Semaphore::new(server_config.max_connections)),
         notify_shutdown,
         shutdown_complete_tx,
     };
 
-    // Concurrently run the server and listen for the `shutdown` signal. The
-    // server task runs until an error is encountered, so under normal
-    // circumstances, this `select!` statement runs until the `shutdown` signal
-    // is received.
-    //
-    // `select!` statements are written in the form of:
-    //
-    // ```
-    // <result of async op> = <async op> => <step to perform with result>
-    // ```
-    //
-    // All `<async op>` statements are executed concurrently. Once the **first**
-    // op completes, its associated `<step to perform with result>` is
-    // performed.
-    //
-    // The `select!` macro is a foundational building block for writing
-    // asynchronous Rust. See the API docs for more details:
-    //
-    // https://docs.rs/tokio/*/tokio/macro.select.html
-    tokio::select! {
-        res = server.run() => {
-            // If an error is received here, accepting connections from the TCP
-            // listener failed multiple times and the server is giving up and
-            // shutting down.
-            //
-            // Errors encountered when handling individual connections do not
-            // bubble up to this point.
-            if let Err(err) = res {
-                error!(cause = %err, "failed to accept");
+    let mut current_server = server_config;
+
+    tokio::pin!(shutdown);
+
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .expect("failed to register SIGHUP handler");
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
+
+    loop {
+        #[cfg(unix)]
+        let reload_signal = sighup.recv();
+        #[cfg(not(unix))]
+        let reload_signal = std::future::pending::<Option<()>>();
+
+        #[cfg(unix)]
+        let term_signal = sigterm.recv();
+        #[cfg(not(unix))]
+        let term_signal = std::future::pending::<Option<()>>();
+
+        tokio::select! {
+            res = server.run() => {
+                // If an error is received here, accepting connections from the TCP
+                // listener failed multiple times and the server is giving up and
+                // shutting down.
+                //
+                // Errors encountered when handling individual connections do not
+                // bubble up to this point.
+                if let Err(err) = res {
+                    error!(cause = %err, "failed to accept");
+                }
+                break;
             }
-        }
-        _ = shutdown => {
-            // The shutdown signal has been received.
-            info!("shutting down");
+            _ = &mut shutdown => {
+                info!("shutting down");
+                break;
+            }
+            _ = term_signal => {
+                info!("SIGTERM received, shutting down");
+                break;
+            }
+            _ = reload_signal => {
+                if let Some(ref ctx) = reload_ctx {
+                    handle_reload(ctx, &mut current_server, &runtime_config);
+                }
+            }
         }
     }
 
@@ -194,7 +218,47 @@ pub async fn run(listener: TcpListener, shutdown: impl Future) {
     // handle held by the listener has been dropped above, the only remaining
     // `Sender` instances are held by connection handler tasks. When those drop,
     // the `mpsc` channel will close and `recv()` will return `None`.
-    let _ = shutdown_complete_rx.recv().await;
+    let shutdown_timeout = runtime_config.load().shutdown_timeout;
+    if time::timeout(shutdown_timeout, shutdown_complete_rx.recv())
+        .await
+        .is_err()
+    {
+        info!("shutdown timeout elapsed, forcing shutdown");
+    }
+}
+
+fn handle_reload(
+    ctx: &ReloadContext,
+    current_server: &mut ServerConfig,
+    runtime_config: &Arc<ArcSwap<RuntimeConfig>>,
+) {
+    info!("SIGHUP received, reloading configuration");
+
+    match load_config(&ctx.config_path, &ctx.overrides) {
+        Ok(new_server) => {
+            let change = classify_config_change(current_server, &new_server);
+
+            match change {
+                ConfigChange::NoChange => {
+                    info!("configuration unchanged");
+                }
+                change => {
+                    runtime_config.store(Arc::new(RuntimeConfig::new(&new_server)));
+                    *current_server = new_server;
+
+                    match change {
+                        ConfigChange::ListenerChanged => {
+                            info!("configuration reloaded (listener changes require restart to take effect)");
+                        }
+                        _ => info!("configuration reloaded"),
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            error!(cause = %e, "configuration reload failed, continuing with current configuration");
+        }
+    }
 }
 
 impl Listener {
@@ -242,8 +306,6 @@ impl Listener {
                 // Get a handle to the shared database.
                 db: self.db_holder.db(),
 
-                // Initialize the connection state. This allocates read/write
-                // buffers to perform redis protocol frame parsing.
                 connection: Connection::new(socket),
 
                 // Receive shutdown notifications.

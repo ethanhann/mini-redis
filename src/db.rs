@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, Notify};
 use tokio::time::{self, Duration, Instant};
 
@@ -5,6 +6,8 @@ use bytes::Bytes;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use tracing::debug;
+
+use crate::RuntimeConfig;
 
 /// A wrapper around a `Db` instance. This exists to allow orderly cleanup
 /// of the `Db` by signalling the background purge task to shut down when
@@ -55,6 +58,8 @@ struct Shared {
     /// task waits on this to be notified, then checks for expired values or the
     /// shutdown signal.
     background_task: Notify,
+
+    runtime_config: Arc<ArcSwap<RuntimeConfig>>,
 }
 
 #[derive(Debug)]
@@ -99,8 +104,10 @@ struct Entry {
 impl DbDropGuard {
     /// Create a new `DbDropGuard`, wrapping a `Db` instance. When this is dropped
     /// the `Db`'s purge task will be shut down.
-    pub(crate) fn new() -> DbDropGuard {
-        DbDropGuard { db: Db::new() }
+    pub(crate) fn new(runtime_config: Arc<ArcSwap<RuntimeConfig>>) -> DbDropGuard {
+        DbDropGuard {
+            db: Db::new(runtime_config),
+        }
     }
 
     /// Get the shared database. Internally, this is an
@@ -120,7 +127,7 @@ impl Drop for DbDropGuard {
 impl Db {
     /// Create a new, empty, `Db` instance. Allocates shared state and spawns a
     /// background task to manage key expiration.
-    pub(crate) fn new() -> Db {
+    pub(crate) fn new(runtime_config: Arc<ArcSwap<RuntimeConfig>>) -> Db {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 entries: HashMap::new(),
@@ -129,6 +136,7 @@ impl Db {
                 shutdown: false,
             }),
             background_task: Notify::new(),
+            runtime_config,
         });
 
         // Start the background task.
@@ -234,17 +242,8 @@ impl Db {
         match state.pub_sub.entry(key) {
             Entry::Occupied(e) => e.get().subscribe(),
             Entry::Vacant(e) => {
-                // No broadcast channel exists yet, so create one.
-                //
-                // The channel is created with a capacity of `1024` messages. A
-                // message is stored in the channel until **all** subscribers
-                // have seen it. This means that a slow subscriber could result
-                // in messages being held indefinitely.
-                //
-                // When the channel's capacity fills up, publishing will result
-                // in old messages being dropped. This prevents slow consumers
-                // from blocking the entire system.
-                let (tx, rx) = broadcast::channel(1024);
+                let capacity = self.shared.runtime_config.load().pub_sub_channel_capacity;
+                let (tx, rx) = broadcast::channel(capacity);
                 e.insert(tx);
                 rx
             }

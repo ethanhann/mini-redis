@@ -1,0 +1,7 @@
+[server]
+hostname = "127.0.0.1"
+port = 6379
+max_connections = 250
+shutdown_timeout_secs = 30
+pub_sub_channel_capacity = 1024
+pid_file = "/tmp/mini-redis.pid"
