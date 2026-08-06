@@ -28,7 +28,7 @@ use opentelemetry_aws::trace::XrayPropagator;
 use tracing_subscriber::{
     fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError, EnvFilter,
 };
-use mini_redis::conf::{load_config, ConfigOverrides};
+use mini_redis::conf::{load_config, render_config, render_template, ConfigOverrides, ConfigView};
 use mini_redis::server::ReloadContext;
 
 #[tokio::main]
@@ -37,10 +37,22 @@ pub async fn main() -> mini_redis::Result<()> {
 
     let cli = Cli::parse();
 
+    // These two flags print and exit instead of starting a server, so they are
+    // handled before the listener binds.
+    if cli.print_template {
+        print!("{}", render_template()?);
+        return Ok(());
+    }
+
     let overrides = ConfigOverrides {
         hostname: cli.host,
         port: cli.port,
     };
+
+    if let Some(view) = cli.print_config {
+        print!("{}", render_config(&cli.config, &overrides, view.into())?);
+        return Ok(());
+    }
 
     let server_config = load_config(&cli.config, &overrides)?;
 
@@ -91,6 +103,35 @@ struct Cli {
 
     #[arg(long)]
     port: Option<u16>,
+
+    /// Print a documented configuration file generated from the spec, then
+    /// exit. Redirect it to a file to start a new configuration.
+    #[arg(long)]
+    print_template: bool,
+
+    /// Print the configuration this server would run with, then exit. `source`
+    /// shows only what the file set, `populated` fills in the defaults.
+    #[arg(long, value_name = "VIEW")]
+    print_config: Option<ConfigViewArg>,
+}
+
+/// A copy of [`ConfigView`] that `clap` can parse.
+///
+/// `clap` derives argument parsing from the type itself, so the flag needs its
+/// own enum here rather than a `clap` dependency on the conf module.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ConfigViewArg {
+    Source,
+    Populated,
+}
+
+impl From<ConfigViewArg> for ConfigView {
+    fn from(value: ConfigViewArg) -> Self {
+        match value {
+            ConfigViewArg::Source => ConfigView::Source,
+            ConfigViewArg::Populated => ConfigView::Populated,
+        }
+    }
 }
 
 #[cfg(not(feature = "otel"))]

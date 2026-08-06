@@ -284,9 +284,9 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
 name = "confval"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a038b9af4f47c83b549784139ec8c83817082b13ed0759bb7ece8a6d20e600"
+checksum = "e14234620687dd14cae9e3e129c3e9d665752f2d8b467d1df35a5a20d341e8b7"
 dependencies = [
  "confval-derive",
  "owo-colors",
@@ -295,9 +295,9 @@ dependencies = [
 
 [[package]]
 name = "confval-derive"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ee4805aaab5d4207d9eae44596fc7b1951615686bfa0274a3764e0c976ad6e6"
+checksum = "6f231f0c419db0dd33b20c3a02cfe7261d223605eb3e413db270e596b032ae63"
 dependencies = [
  "proc-macro2",
  "quote",

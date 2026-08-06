@@ -6,10 +6,14 @@ use confval::{range_constraint, RangeConstraint};
 use crate::conf::validation::validator::{net, path};
 
 #[derive(confval::Spec)]
+#[confval(derive_default)]
 pub struct ServerSpec {
+    /// Address the server listens on. This has to be an IP address rather than
+    /// a DNS name, because it is bound directly.
     #[confval(default = "127.0.0.1".to_string())]
     pub hostname: Located<String>,
 
+    /// Port the server listens on. 6379 is the port redis uses by default.
     #[confval(default = 6379)]
     pub port: Located<i64>,
 
@@ -28,6 +32,8 @@ pub struct ServerSpec {
     #[confval(default = 250)]
     pub max_connections: Located<i64>,
 
+    /// How long to wait for in-flight connections to finish during a shutdown
+    /// before dropping them.
     #[confval(default = 30)]
     pub shutdown_timeout_secs: Located<i64>,
 
@@ -41,24 +47,9 @@ pub struct ServerSpec {
 
     /// Path to write the server's PID file. Used by operators to send signals
     /// (e.g. `kill -HUP $(cat /tmp/mini-redis.pid)` for hot reload).
-    /// Set to `None` to disable PID file creation.
+    /// Leave this unset to skip writing a PID file.
     pub pid_file: Option<Located<String>>,
 }
-
-impl Default for ServerSpec {
-    fn default() -> Self {
-        ServerSpec {
-            hostname: Located::detached("127.0.0.1".to_string()),
-            port: Located::detached(6379),
-            max_connections: Located::detached(250),
-            shutdown_timeout_secs: Located::detached(30),
-            pub_sub_channel_capacity: Located::detached(DEFAULT_PUB_SUB_CHANNEL_CAPACITY as i64),
-            pid_file: None,
-        }
-    }
-}
-
-pub const DEFAULT_PUB_SUB_CHANNEL_CAPACITY: usize = 1024;
 
 range_constraint!(PORT, i64, min: 1, max: 65535);
 range_constraint!(MAX_CONNECTIONS, i64, min: 1, max: 250, help: "A friendly reminder that this is not a production server ;)");

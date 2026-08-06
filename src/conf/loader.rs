@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use confval::format::toml::parse_toml;
+use confval::format::toml::{emit_toml, parse_toml};
 use confval::prelude::*;
 
 use crate::Error;
@@ -15,6 +15,26 @@ pub struct ConfigOverrides {
 }
 
 pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ServerConfig, Error> {
+    with_validated_spec(path, overrides, |file, report| {
+        //-------------------------------------------------------------------------
+        // Lower. Narrowing in the lowering functions is safe only because
+        // lowering does not run on a report with errors.
+        //-------------------------------------------------------------------------
+        ServerConfig::lower(&file.server.value, report)
+    })
+}
+
+/// Read `path`, apply `overrides`, validate the result, and hand the spec to
+/// `finish` when no error was reported.
+///
+/// Everything up to the error gate is the same whether the caller wants the
+/// lowered config or one of the views, so both go through here. `finish` runs
+/// before the report is rendered, so a diagnostic it adds is still shown.
+fn with_validated_spec<T>(
+    path: &Path,
+    overrides: &ConfigOverrides,
+    finish: impl FnOnce(&ConfigFile, &mut Report) -> Option<T>,
+) -> Result<T, Error> {
     if !path.exists() {
         return Err(format!("config file does not exist: {}", path.display()).into());
     }
@@ -35,7 +55,8 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ServerCon
     let resolved = parsed.and_then(|mut file| {
         //---------------------------------------------------------------------
         // Apply CLI overrides on the parsed spec. A detached span marks a value
-        // that did not come from the source file.
+        // that did not come from the source file. That is also why an override
+        // does not show up in the source view.
         //---------------------------------------------------------------------
 
         if let Some(hostname) = &overrides.hostname {
@@ -52,16 +73,11 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ServerCon
 
         file.server.value.validate(&mut report);
 
-        //---------------------------------------------------------------------
-        // Gate, then lower. Narrowing in the lowering functions is safe only
-        // because lowering does not run on a report that has errors.
-        //---------------------------------------------------------------------
-
         if report.has_errors() {
             return None;
         }
 
-        ServerConfig::lower(&file.server.value, &mut report)
+        finish(&file, &mut report)
     });
 
     if report.has_issues() {
@@ -71,4 +87,41 @@ pub fn load_config(path: &Path, overrides: &ConfigOverrides) -> Result<ServerCon
     }
 
     resolved.ok_or_else(|| "config validation failed".into())
+}
+
+/// Render the configuration `path` resolves to, as TOML.
+///
+/// [`ConfigView::Source`] shows what the file set, with every default left out,
+/// which is what you want when tracking down where a value came from.
+/// [`ConfigView::Populated`] fills the defaults in, so it shows what the server
+/// resolved to.
+pub fn render_config(
+    path: &Path,
+    overrides: &ConfigOverrides,
+    view: ConfigView,
+) -> Result<String, Error> {
+    with_validated_spec(path, overrides, |file, report| {
+        let fields = match view {
+            ConfigView::Source => file.to_source_fields(),
+            ConfigView::Populated => file.to_fields(),
+        };
+        match emit_toml(&fields) {
+            Ok(text) => Some(text),
+            Err(error) => {
+                report
+                    .error(format!("cannot render the configuration: {error}"))
+                    .emit();
+                None
+            }
+        }
+    })
+}
+
+/// Which form of the loaded configuration to render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigView {
+    /// Only what the file set. Defaults and CLI overrides are left out.
+    Source,
+    /// Every setting, with the defaults the file omitted filled in.
+    Populated,
 }
