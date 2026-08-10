@@ -3,7 +3,7 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
-use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
+use crate::{Command, Connection, Db, DbDropGuard, LimitsConfig, Shutdown};
 
 use std::future::Future;
 use std::sync::Arc;
@@ -61,6 +61,11 @@ struct Listener {
     /// `shutdown_complete_rx.recv()` completing with `None`. At this point, it
     /// is safe to exit the server process.
     shutdown_complete_tx: mpsc::Sender<()>,
+
+    /// The longest the accept loop waits between retries before giving up.
+    ///
+    /// Read from the `limits` block of the configuration file.
+    max_backoff_seconds: u64,
 }
 
 /// Per-connection handler. Reads requests from `connection` and applies the
@@ -97,21 +102,7 @@ struct Handler {
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-/// Maximum number of concurrent connections the redis server will accept.
-///
-/// When this limit is reached, the server will stop accepting connections until
-/// an active connection terminates.
-///
-/// A real application will want to make this value configurable, but for this
-/// example, it is hard coded.
-///
-/// This is also set to a pretty low value to discourage using this in
-/// production (you'd think that all the disclaimers would make it obvious that
-/// this is not a serious project... but I thought that about mini-http as
-/// well).
-const MAX_CONNECTIONS: usize = 250;
-
-/// Run the mini-redis server.
+/// Run the mini-redis server with the default limits.
 ///
 /// Accepts connections from the supplied listener. For each inbound connection,
 /// a task is spawned to handle that connection. The server runs until the
@@ -120,7 +111,20 @@ const MAX_CONNECTIONS: usize = 250;
 ///
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
+///
+/// If you want the limits an operator configured, use
+/// [`run_with_limits`] instead.
 pub async fn run(listener: TcpListener, shutdown: impl Future) {
+    run_with_limits(listener, LimitsConfig::default(), shutdown).await
+}
+
+/// Run the mini-redis server under the supplied limits.
+///
+/// `limits` comes from the `limits` block of the configuration file, or from
+/// `LimitsConfig::default()` when there is no file. It caps how many
+/// connections are open at once and how long the accept loop retries before
+/// giving up.
+pub async fn run_with_limits(listener: TcpListener, limits: LimitsConfig, shutdown: impl Future) {
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -133,9 +137,10 @@ pub async fn run(listener: TcpListener, shutdown: impl Future) {
     let mut server = Listener {
         listener,
         db_holder: DbDropGuard::new(),
-        limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        limit_connections: Arc::new(Semaphore::new(limits.max_connections)),
         notify_shutdown,
         shutdown_complete_tx,
+        max_backoff_seconds: limits.max_backoff_seconds,
     };
 
     // Concurrently run the server and listen for the `shutdown` signal. The
@@ -273,8 +278,8 @@ impl Listener {
     /// Errors are handled by backing off and retrying. An exponential backoff
     /// strategy is used. After the first failure, the task waits for 1 second.
     /// After the second failure, the task waits for 2 seconds. Each subsequent
-    /// failure doubles the wait time. If accepting fails on the 6th try after
-    /// waiting for 64 seconds, then this function returns with an error.
+    /// failure doubles the wait time. Once the wait would exceed
+    /// `max_backoff_seconds`, this function returns with an error.
     async fn accept(&mut self) -> crate::Result<TcpStream> {
         let mut backoff = 1;
 
@@ -285,7 +290,7 @@ impl Listener {
             match self.listener.accept().await {
                 Ok((socket, _)) => return Ok(socket),
                 Err(err) => {
-                    if backoff > 64 {
+                    if backoff > self.max_backoff_seconds {
                         // Accept has failed too many times. Return the error.
                         return Err(err.into());
                     }

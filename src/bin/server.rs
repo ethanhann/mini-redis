@@ -1,16 +1,21 @@
 //! mini-redis server.
 //!
 //! This file is the entry point for the server implemented in the library. It
-//! performs command line parsing and passes the arguments on to
-//! `mini_redis::server`.
+//! performs command line parsing, loads the configuration file, and passes the
+//! result on to `mini_redis::server`.
 //!
-//! The `clap` crate is used for parsing arguments.
+//! The `clap` crate is used for parsing arguments. A flag the operator passed
+//! wins over the same setting in the file, so an existing invocation keeps
+//! working once a file is added.
 
-use mini_redis::{server, DEFAULT_PORT};
+use mini_redis::{conf, server, LogLevel};
 
 use clap::Parser;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tokio::signal;
+use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "otel")]
 // To be able to set the XrayPropagator
@@ -24,21 +29,27 @@ use opentelemetry_aws::trace::XrayPropagator;
 #[cfg(feature = "otel")]
 // The `Ext` traits are to allow the Registry to accept the
 // OpenTelemetry-specific types (such as `OpenTelemetryLayer`)
-use tracing_subscriber::{
-    fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError, EnvFilter,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, util::TryInitError};
 
 #[tokio::main]
 pub async fn main() -> mini_redis::Result<()> {
-    set_up_logging()?;
-
     let cli = Cli::parse();
-    let port = cli.port.unwrap_or(DEFAULT_PORT);
+
+    // Loading comes before logging, because the level to log at is one of the
+    // settings being loaded. Any diagnostic is written to standard error
+    // directly, so it is readable whether or not logging ever starts.
+    let Some(config) = conf::load(cli.config.as_deref()) else {
+        std::process::exit(1);
+    };
+
+    set_up_logging(config.log_level)?;
+
+    let port = cli.port.unwrap_or(config.port);
 
     // Bind a TCP listener
-    let listener = TcpListener::bind(&format!("127.0.0.1:{port}")).await?;
+    let listener = TcpListener::bind(SocketAddr::new(config.bind_address, port)).await?;
 
-    server::run(listener, signal::ctrl_c()).await;
+    server::run_with_limits(listener, config.limits, signal::ctrl_c()).await;
 
     Ok(())
 }
@@ -46,18 +57,34 @@ pub async fn main() -> mini_redis::Result<()> {
 #[derive(Parser, Debug)]
 #[command(name = "mini-redis-server", version, author, about = "A Redis server")]
 struct Cli {
+    /// Path to a TOML configuration file. Without it, every setting takes its
+    /// default.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Port to listen on. Takes precedence over the configuration file.
     #[arg(long)]
     port: Option<u16>,
 }
 
+/// Builds the filter logging starts with.
+///
+/// `RUST_LOG` wins when it is set, which keeps the usual way of turning up
+/// verbosity for one run working without editing the file.
+fn env_filter(level: LogLevel) -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.as_str()))
+}
+
 #[cfg(not(feature = "otel"))]
-fn set_up_logging() -> mini_redis::Result<()> {
+fn set_up_logging(level: LogLevel) -> mini_redis::Result<()> {
     // See https://docs.rs/tracing for more info
-    tracing_subscriber::fmt::try_init()
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter(level))
+        .try_init()
 }
 
 #[cfg(feature = "otel")]
-fn set_up_logging() -> Result<(), TryInitError> {
+fn set_up_logging(level: LogLevel) -> Result<(), TryInitError> {
     // Set the global propagator to X-Ray propagator
     // Note: If you need to pass the x-amzn-trace-id across services in the same trace,
     // you will need this line. However, this requires additional code not pictured here.
@@ -80,9 +107,7 @@ fn set_up_logging() -> Result<(), TryInitError> {
     // Create a tracing layer with the configured tracer
     let opentelemetry = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // Parse an `EnvFilter` configuration from the `RUST_LOG`
-    // environment variable.
-    let filter = EnvFilter::from_default_env();
+    let filter = env_filter(level);
 
     // Use the tracing subscriber `Registry`, or any other subscriber
     // that impls `LookupSpan`
