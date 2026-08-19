@@ -25,6 +25,8 @@
 //!   intermediate representation between a "command" and the byte
 //!   representation.
 
+pub mod conf;
+
 pub mod clients;
 pub use clients::{BlockingClient, BufferedClient, Client};
 

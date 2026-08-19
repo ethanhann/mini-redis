@@ -1,0 +1,8 @@
+bind = "not-an-address"
+port = 99999
+max_connections = 0
+log_level = "chatty"
+
+[backoff]
+initial_seconds = 30
+max_seconds = 5

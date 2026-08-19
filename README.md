@@ -59,6 +59,30 @@ cargo run --bin mini-redis-cli set foo bar
 cargo run --bin mini-redis-cli get foo
 ```
 
+## Configuration
+
+The server reads an optional TOML file.
+Pass it with `--config`:
+
+```
+cargo run --bin mini-redis-server -- --config mini-redis.toml
+```
+
+The repository holds a [`mini-redis.toml`](mini-redis.toml) that sets every
+value to its default.
+A flag on the command line wins over the file, and the file wins over the
+declared defaults.
+The `RUST_LOG` environment variable still wins over `log_level`.
+
+The file sets the bind address, the port, the connection limit, the log level,
+and the retry schedule the accept loop follows after a failed accept.
+
+The [`confval`](https://crates.io/crates/confval) crate reads the file.
+Each value keeps the line and the column it came from, so a diagnostic points
+at the value that caused it.
+One load reports every problem in the file rather than the first, and the
+server refuses to start until the file is valid.
+
 ## OpenTelemetry
 
 If you are running many instances of your application (which is usually the case

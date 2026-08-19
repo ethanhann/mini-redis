@@ -3,13 +3,14 @@
 //! Provides an async `run` function that listens for inbound connections,
 //! spawning a task per connection.
 
+use crate::conf::{BackoffConfig, ServerConfig};
 use crate::{Command, Connection, Db, DbDropGuard, Shutdown};
 
 use std::future::Future;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
-use tokio::time::{self, Duration};
+use tokio::time;
 use tracing::{debug, error, info, instrument};
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
@@ -47,6 +48,11 @@ struct Listener {
     /// the broadcast::Sender. Each active connection receives it, reaches a
     /// safe terminal state, and completes the task.
     notify_shutdown: broadcast::Sender<()>,
+
+    /// Retry schedule the accept loop follows after a failed accept.
+    ///
+    /// Supplied by configuration. See `conf::BackoffConfig`.
+    backoff: BackoffConfig,
 
     /// Used as part of the graceful shutdown process to wait for client
     /// connections to complete processing.
@@ -97,20 +103,6 @@ struct Handler {
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-/// Maximum number of concurrent connections the redis server will accept.
-///
-/// When this limit is reached, the server will stop accepting connections until
-/// an active connection terminates.
-///
-/// A real application will want to make this value configurable, but for this
-/// example, it is hard coded.
-///
-/// This is also set to a pretty low value to discourage using this in
-/// production (you'd think that all the disclaimers would make it obvious that
-/// this is not a serious project... but I thought that about mini-http as
-/// well).
-const MAX_CONNECTIONS: usize = 250;
-
 /// Run the mini-redis server.
 ///
 /// Accepts connections from the supplied listener. For each inbound connection,
@@ -121,6 +113,17 @@ const MAX_CONNECTIONS: usize = 250;
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
 pub async fn run(listener: TcpListener, shutdown: impl Future) {
+    match crate::conf::defaults() {
+        Ok(config) => run_with_config(listener, shutdown, config).await,
+        Err(err) => error!(cause = %err, "the default configuration is not valid"),
+    }
+}
+
+/// Run the mini-redis server on a supplied configuration.
+///
+/// Behaves as `run`, and reads the connection limit and the accept retry
+/// schedule from `config` rather than from the defaults.
+pub async fn run_with_config(listener: TcpListener, shutdown: impl Future, config: ServerConfig) {
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -133,7 +136,8 @@ pub async fn run(listener: TcpListener, shutdown: impl Future) {
     let mut server = Listener {
         listener,
         db_holder: DbDropGuard::new(),
-        limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        limit_connections: Arc::new(Semaphore::new(config.max_connections)),
+        backoff: config.backoff,
         notify_shutdown,
         shutdown_complete_tx,
     };
@@ -271,12 +275,12 @@ impl Listener {
     /// Accept an inbound connection.
     ///
     /// Errors are handled by backing off and retrying. An exponential backoff
-    /// strategy is used. After the first failure, the task waits for 1 second.
-    /// After the second failure, the task waits for 2 seconds. Each subsequent
-    /// failure doubles the wait time. If accepting fails on the 6th try after
-    /// waiting for 64 seconds, then this function returns with an error.
+    /// strategy is used. After the first failure, the task waits for the
+    /// configured initial period. Each subsequent failure doubles the wait
+    /// time. Once the wait time passes the configured maximum, this function
+    /// returns with an error.
     async fn accept(&mut self) -> crate::Result<TcpStream> {
-        let mut backoff = 1;
+        let mut backoff = self.backoff.initial;
 
         // Try to accept a few times
         loop {
@@ -285,7 +289,7 @@ impl Listener {
             match self.listener.accept().await {
                 Ok((socket, _)) => return Ok(socket),
                 Err(err) => {
-                    if backoff > 64 {
+                    if backoff > self.backoff.max {
                         // Accept has failed too many times. Return the error.
                         return Err(err.into());
                     }
@@ -293,7 +297,7 @@ impl Listener {
             }
 
             // Pause execution until the back off period elapses.
-            time::sleep(Duration::from_secs(backoff)).await;
+            time::sleep(backoff).await;
 
             // Double the back off
             backoff *= 2;
