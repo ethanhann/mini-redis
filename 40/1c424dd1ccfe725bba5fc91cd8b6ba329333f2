@@ -1,0 +1,72 @@
+README.md
+  s_8fdbb0ce27b053::t_9e931115ef0cc7 62-85
+src/conf/loader.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-28,31-41,43-110,116,119-121,126
+  s_8fdbb0ce27b053::t_d1c69eb13858f9 42
+  s_8fdbb0ce27b053::t_70984a167f05f6 118
+  s_8fdbb0ce27b053::t_d8ab02a7f09d45 29-30,111-115,117,122-125
+src/lib.rs
+  s_8fdbb0ce27b053::t_70984a167f05f6 28-29
+src/conf/validation/validator/net.rs
+  s_8fdbb0ce27b053::t_1c800e7f40d63b 1-33
+mini-redis.toml
+  s_8fdbb0ce27b053::t_11a82113bd7ed3 1-27
+src/server.rs
+  s_8fdbb0ce27b053::t_6ff134f6311e8e 13
+  s_8fdbb0ce27b053::t_5ed7b42d723e83 6,52-56,116-125,139-140,278-281,283,292,300
+  s_8fdbb0ce27b053::t_3660cd12644166 126
+src/bin/server.rs
+  s_8fdbb0ce27b053::t_9a0cc6d3093ee6 7-9,12,15-16,19,49,52-53,55,60-62,64-75,81-84,88,90-97,101,124
+  s_8fdbb0ce27b053::t_3660cd12644166 33
+  s_8fdbb0ce27b053::t_d1c69eb13858f9 11,39-48,63
+  s_8fdbb0ce27b053::t_23ed90e02bbbee 38
+tests/fixtures/server.toml
+  s_8fdbb0ce27b053::t_11a82113bd7ed3 1-8
+src/conf/types/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-4
+src/conf/types/runtime/server.rs
+  s_8fdbb0ce27b053::t_1c800e7f40d63b 1-49
+src/conf/types/specification/server.rs
+  s_8fdbb0ce27b053::t_950143fb596ede 1-61
+tests/fixtures/server_partial.toml
+  s_8fdbb0ce27b053::t_11a82113bd7ed3 1
+src/conf/types/runtime/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-3
+tests/conf.rs
+  s_8fdbb0ce27b053::t_04827d61476fc3 69,109,124
+  s_8fdbb0ce27b053::t_506113dc190de6 71
+  s_8fdbb0ce27b053::t_646b6dec2ade18 1-68,70,72,83,86-88,91-93,96-108,110-123,125-127
+  s_8fdbb0ce27b053::t_3660cd12644166 73-82,84-85,89-90,94-95
+src/conf/validation/server.rs
+  s_8fdbb0ce27b053::t_1c800e7f40d63b 1-28
+Cargo.toml
+  s_8fdbb0ce27b053::t_a7800128026ce0 40
+src/conf/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-17
+tests/fixtures/server_invalid.toml
+  s_8fdbb0ce27b053::t_11a82113bd7ed3 1-8
+src/conf/types/specification/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-3
+src/conf/validation/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-8
+src/conf/validation/validator/mod.rs
+  s_8fdbb0ce27b053::t_cc4b15d624d593 1-3
+Cargo.lock
+  s_8fdbb0ce27b053::t_270ea73deca002 3,29-39,56,58,287-308,334-339,439,452-457,547-557,629,631,647,790,903,905,935,937,1051-1060,1062,1069,1071,1075,1170-1180,1282-1318,1355,1469-1474,1649-1657
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "401c424dd1ccfe725bba5fc91cd8b6ba329333f2",
+  "prompts": {},
+  "sessions": {
+    "s_8fdbb0ce27b053": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4d1db920-f009-4078-9ae8-8138b14c4fde",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ethan Hann <ethanhann@gmail.com>"
+    }
+  }
+}
