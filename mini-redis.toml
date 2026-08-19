@@ -1,0 +1,27 @@
+# Configuration for mini-redis-server.
+#
+# Pass this file with `mini-redis-server --config mini-redis.toml`.
+# Every value below is the declared default, so an omitted field behaves the
+# same as the line that sets it. A command line flag wins over this file.
+
+# IP address the listener binds to.
+bind = "127.0.0.1"
+
+# TCP port the listener accepts connections on. 1 to 65535.
+port = 6379
+
+# Number of connections the server serves at one time. 1 to 65536.
+max_connections = 250
+
+# Verbosity the tracing subscriber starts at.
+# One of: trace, debug, info, warn, error.
+log_level = "info"
+
+# Retry schedule the accept loop follows after a failed accept.
+[backoff]
+# Seconds the accept loop waits after the first failure. 1 to 3600.
+initial_seconds = 1
+
+# Seconds after which the accept loop gives up. 1 to 3600.
+# This must not be smaller than initial_seconds.
+max_seconds = 64
